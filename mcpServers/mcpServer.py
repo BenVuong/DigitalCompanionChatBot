@@ -29,7 +29,7 @@ def searchAnime(queryTitle: str) -> str:
 @mcp.tool()
 def getAnimeInfo(mal_id: int) -> str:
     """Search more info about an anime by using it's respective mal_id. 
-        To get the anime's respective id use searchAnime tool.
+        To get the anime's respective mal_id use searchAnime tool.
         This tool will return the anime's title, type, number of episodes, its score, when it premired, and synopsis
         Args:
             mal_id: the anime's respective mal_id

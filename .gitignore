@@ -1,3 +1,4 @@
 .venv
 chatMemory.db
 .env
+mydatabase.db

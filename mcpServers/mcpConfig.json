@@ -1,0 +1,16 @@
+{
+    "mcpServers": {
+        "anime": {
+            "command": "python",
+            "args": [
+                "mcpServer.py"
+            ]
+        },
+        "Anime-Episodes-Tracker": {
+            "command": "python",
+            "args": [
+                "animeTracker.py"
+            ]
+        }
+    }
+}
