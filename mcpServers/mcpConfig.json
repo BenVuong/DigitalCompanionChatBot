@@ -3,13 +3,19 @@
         "anime": {
             "command": "python",
             "args": [
-                "mcpServer.py"
+                "/home/ben/chatbot/mcpServers/mcpServer.py"
             ]
         },
         "Anime-Episodes-Tracker": {
             "command": "python",
             "args": [
-                "animeTracker.py"
+                "/home/ben/chatbot/mcpServers/animeTracker.py"
+            ]
+        },
+        "timerServer": {
+            "command": "python",
+            "args": [
+                "/home/ben/chatbot/mcpServers/timerServer.py"
             ]
         }
     }
