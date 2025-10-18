@@ -1,5 +1,4 @@
 from openai import OpenAI
-import sqlite3
 import json
 from mcp import StdioServerParameters
 from mcp.client.session import ClientSession  
@@ -8,29 +7,12 @@ import asyncio
 import os
 from dotenv import load_dotenv
 load_dotenv()
+from chatMessage import ChatMessage
 from watchfiles import awatch
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-conn = sqlite3.connect("chatMemory.db")
-cursor = conn.cursor()
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-               role TEXT NOT NULL,
-               content TEXT NOT NULL
-               )
-""")
-conn.commit()
+client = OpenAI(api_key="none", base_url="http://localhost:5001/v1" )
+db = ChatMessage("chatMemory.db")
 
-def saveMessage(role, content):
-    cursor.execute("INSERT INTO messages (role, content) VALUES (?, ?)", (role, content))
-    conn.commit()
-
-def getMessageHistory(limit = 10):
-    cursor.execute("SELECT role, content FROM messages ORDER by id DESC LIMIT ?", (limit,))
-    rows = cursor.fetchall()
-
-    return[{"role": role, "content": content} for role, content in rows[::-1]]
 
 def loadMCPConfig(configFilePath = "mcpConfig.json"):
     try:
@@ -96,10 +78,17 @@ async def watchForScheduledPrompts(callback):
                     await asyncio.sleep(0.05)  # small delay to ensure file is written
                     with open(path, "r") as f:
                         data = json.load(f)
-                    os.remove(path)
+                   
                     system_prompt = data.get("systemPrompt")
-                    if system_prompt:
-                        await callback(system_prompt)
+                    
+                    if not system_prompt:
+                        continue
+
+                    
+                    with open(path, "w") as f:
+                        json.dump({"system_prompt": ""}, f)
+                   
+                    await callback(system_prompt)
                 except Exception as e:
                     print(f"⚠️ Error handling scheduled prompt: {e}")
 
@@ -107,8 +96,12 @@ async def watchForScheduledPrompts(callback):
     
 async def chat(input, role, sessionsDict, toolsDict):
     
-    saveMessage(role, input)
-    messages = getMessageHistory()
+    if role == "user":
+        db.saveMessage(role, input)
+        messages = db.getMessageHistory()
+    else:
+        messages = db.getMessageHistory()
+        message.append({"role":"system", "content": input})
 
     openAITools = toolsDict
     openAITools = []
@@ -133,7 +126,7 @@ async def chat(input, role, sessionsDict, toolsDict):
 
         if not message.tool_calls:
             reply = message.content
-            saveMessage("assistant", reply)
+            db.saveMessage("assistant", reply)
             return reply
         
         messages.append({
@@ -237,6 +230,9 @@ async def run_with_servers(mcpServers):
         server_contexts.append((serverName, stdio_client(serverParams)))
     
     async def handleScheduledPrompt(prompt):
+        if not prompt:
+            return
+
         print(f"\n🕐 System Trigger: {prompt}")
         reply = await chat(prompt, "system",sessions, None)
         print(f"\nAssistant: {reply}\n")

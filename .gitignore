@@ -2,3 +2,5 @@
 chatMemory.db
 .env
 mydatabase.db
+pending_prompt.json
+__pycache__
