@@ -1,6 +1,5 @@
 from openai import OpenAI
 import json
-from mcp import StdioServerParameters
 from mcp.client.session import ClientSession  
 from mcp.client.stdio import stdio_client
 import asyncio
@@ -9,42 +8,10 @@ from dotenv import load_dotenv
 load_dotenv()
 from chatMessage import ChatMessage
 from watchfiles import awatch
+from mcpManager import loadMCPConfig, mcpToolToOpenAIFormat
 
 client = OpenAI(api_key="none", base_url="http://localhost:5001/v1" )
 db = ChatMessage("chatMemory.db")
-
-
-def loadMCPConfig(configFilePath = "mcpConfig.json"):
-    try:
-        with open(configFilePath, "r") as f:
-            config = json.load(f)
-
-        mcpServers = {}
-        for name, serverConfig in config.get("mcpServers", {}).items():
-            mcpServers[name] = StdioServerParameters(
-                command=serverConfig["command"],
-                args=serverConfig.get("args", []),
-                env=serverConfig.get("env",None)
-            )
-        return mcpServers
-    except FileNotFoundError:
-        print(f"Config file '{configFilePath}' not found. Now using empty config")
-        return{}    
-    except json.JSONDecodeError as e:
-        print(f"Error parsing config file: {e}")
-        return{}
-
-def mcpToolToOpenAIFormat(mcpTool, serverName):
-    safe_name = f"{serverName}_{mcpTool.name}".replace(":", "_")
-    return{
-        "type": "function",
-        "function":{
-            "name": safe_name,
-            "description": f"[{serverName}] {mcpTool.description}",
-            "parameters": mcpTool.inputSchema
-            
-        }
-    }
 
 def approveToolCall(toolName, arguments):
     print("\n" + "="*60)
@@ -201,23 +168,7 @@ async def chat(input, role, sessionsDict, toolsDict):
             })
     return "Maximum iterations reached. Please try again"
 
-async def connect_to_server(serverName, serverParams):
-    """Connect to a single MCP server and return session info"""
-    try:
-        print(f"Connecting to {serverName}...")
-        read, write = await stdio_client(serverParams).__aenter__()
-        session = ClientSession(read, write)
-        await session.initialize()
-        
-        serverTools = await session.list_tools()
-        print(f"✅ {serverName}: {len(serverTools.tools)} tools available")
-        for tool in serverTools.tools:
-            print(f"   - {tool.name}: {tool.description}")
-        
-        return serverName, session, serverTools.tools, None
-    except Exception as e:
-        print(f"❌ Failed to connect to {serverName}: {e}")
-        return serverName, None, None, str(e)
+
 
 async def run_with_servers(mcpServers):
     """Run the chatbot with all MCP servers connected"""
