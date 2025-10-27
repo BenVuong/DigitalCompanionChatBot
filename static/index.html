@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Chatbot</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>🤖 MCP Chatbot</h1>
+                <div id="connectionStatus" class="connection-status status-disconnected">Disconnected</div>
+            </div>
+            <button class="clear-btn" onclick="clearHistory()">Clear History</button>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <!-- Messages will be added here -->
+        </div>
+
+        <div class="input-container">
+            <input type="text" id="messageInput" class="message-input" placeholder="Type your message..."
+                onkeypress="handleKeyPress(event)">
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let pendingToolCalls = new Map();
+
+        function connect() {
+            ws = new WebSocket('ws://localhost:8000/ws');
+
+            ws.onopen = () => {
+                console.log('Connected to server');
+                updateConnectionStatus(true);
+                loadHistory();
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+
+            ws.onclose = () => {
+                console.log('Disconnected from server');
+                updateConnectionStatus(false);
+                setTimeout(connect, 3000); // Reconnect after 3 seconds
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            if (connected) {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'connection-status status-connected';
+            } else {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'connection-status status-disconnected';
+            }
+        }
+
+        function handleMessage(data) {
+            console.log('Received message:', data);
+            switch (data.type) {
+                case 'message':
+                    addMessage(data.role, data.content);
+                    break;
+                case 'tool_call_request':
+                    showToolCallRequest(data);
+                    break;
+                case 'tool_executing':
+                    updateToolStatus(data.tool_call_id, 'executing', data.tool_name);
+                    break;
+                case 'tool_success':
+                    updateToolStatus(data.tool_call_id, 'success', data.tool_name);
+                    break;
+                case 'tool_error':
+                    updateToolStatus(data.tool_call_id, 'error', data.tool_name, data.error);
+                    break;
+                case 'tool_denied':
+                    updateToolStatus(data.tool_call_id, 'denied', data.tool_name, data.reason);
+                    break;
+            }
+        }
+
+        function addMessage(role, content) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+
+            messageDiv.appendChild(contentDiv);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function showToolCallRequest(data) {
+            const chatContainer = document.getElementById('chatContainer');
+            const toolDiv = document.createElement('div');
+            toolDiv.className = 'tool-call';
+            toolDiv.id = `tool-${data.tool_call_id}`;
+
+            toolDiv.innerHTML = `
+                <div class="tool-call-header">
+                    <svg class="tool-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                    <span class="tool-name">${data.tool_name}</span>
+                </div>
+                <div class="tool-arguments">${JSON.stringify(data.arguments, null, 2)}</div>
+                <div class="tool-actions">
+                    <button class="tool-btn approve-btn" onclick="approveToolCall('${data.tool_call_id}', true)">✓ Approve</button>
+                    <input type="text" class="reason-input" id="reason-${data.tool_call_id}" placeholder="Optional reason for denial...">
+                    <button class="tool-btn deny-btn" onclick="approveToolCall('${data.tool_call_id}', false)">✗ Deny</button>
+                </div>
+                <div id="status-${data.tool_call_id}"></div>
+            `;
+
+            chatContainer.appendChild(toolDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function approveToolCall(toolCallId, approved) {
+            const reason = document.getElementById(`reason-${toolCallId}`).value;
+
+            console.log('Sending approval:', { toolCallId, approved, reason });
+
+            ws.send(JSON.stringify({
+                type: 'tool_approval',
+                tool_call_id: toolCallId,
+                data: {
+                    approved: approved,
+                    reason: reason
+                }
+            }));
+
+            // Disable buttons after response
+            const toolDiv = document.getElementById(`tool-${toolCallId}`);
+            const buttons = toolDiv.querySelectorAll('.tool-btn');
+            const reasonInput = document.getElementById(`reason-${toolCallId}`);
+            buttons.forEach(btn => btn.disabled = true);
+            if (reasonInput) reasonInput.disabled = true;
+
+            console.log('Buttons disabled');
+        }
+
+        function updateToolStatus(toolCallId, status, toolName, message = '') {
+            const statusDiv = document.getElementById(`status-${toolCallId}`);
+            if (!statusDiv) return;
+
+            let statusText = '';
+            let statusClass = '';
+
+            switch (status) {
+                case 'executing':
+                    statusText = `⚙️ Executing ${toolName}...`;
+                    statusClass = 'status-executing';
+                    break;
+                case 'success':
+                    statusText = `✅ Tool executed successfully`;
+                    statusClass = 'status-success';
+                    break;
+                case 'error':
+                    statusText = `❌ Error: ${message}`;
+                    statusClass = 'status-error';
+                    break;
+                case 'denied':
+                    statusText = message ? `🚫 Denied: ${message}` : '🚫 Tool call denied';
+                    statusClass = 'status-denied';
+                    break;
+            }
+
+            statusDiv.innerHTML = `<span class="tool-status ${statusClass}">${statusText}</span>`;
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+
+            if (!message || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            addMessage('user', message);
+
+            ws.send(JSON.stringify({
+                type: 'chat',
+                message: message
+            }));
+
+            input.value = '';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/history');
+                const data = await response.json();
+
+                const chatContainer = document.getElementById('chatContainer');
+                chatContainer.innerHTML = '';
+
+                data.messages.forEach(msg => {
+                    if (msg.role === 'user' || msg.role === 'assistant') {
+                        addMessage(msg.role, msg.content);
+                    }
+                });
+            } catch (error) {
+                console.error('Error loading history:', error);
+            }
+        }
+
+        async function clearHistory() {
+            if (!confirm('Are you sure you want to clear the chat history?')) return;
+
+            try {
+                await fetch('/api/clear-history', { method: 'POST' });
+                document.getElementById('chatContainer').innerHTML = '';
+            } catch (error) {
+                console.error('Error clearing history:', error);
+            }
+        }
+
+        // Connect on page load
+        connect();
+    </script>
+</body>
+
+</html>

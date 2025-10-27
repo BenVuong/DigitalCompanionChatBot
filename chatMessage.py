@@ -21,3 +21,5 @@ CREATE TABLE IF NOT EXISTS messages (
         rows = self.cursor.fetchall()
         return[{"role": role, "content": content} for role, content in rows[::-1]]
     
+    def clearHistory(self):
+        pass
