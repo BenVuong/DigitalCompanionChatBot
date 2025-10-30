@@ -75,6 +75,9 @@
                 case 'message':
                     addMessage(data.role, data.content);
                     break;
+                case 'scheduled_message':
+                    addScheduledMessage(data.system_prompt, data.response);
+                    break;
                 case 'tool_call_request':
                     showToolCallRequest(data);
                     break;
@@ -104,6 +107,29 @@
 
             messageDiv.appendChild(contentDiv);
             chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function addScheduledMessage(systemPrompt, response) {
+            const chatContainer = document.getElementById('chatContainer');
+
+            // Add scheduled message indicator
+            const scheduledDiv = document.createElement('div');
+            scheduledDiv.className = 'scheduled-message';
+            scheduledDiv.innerHTML = `
+                <div class="scheduled-header">
+                    <svg class="scheduled-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <span class="scheduled-label">Scheduled Trigger</span>
+                </div>
+                <div class="scheduled-prompt">${systemPrompt}</div>
+            `;
+            chatContainer.appendChild(scheduledDiv);
+
+            // Add assistant response
+            addMessage('assistant', response);
+
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 

@@ -219,6 +219,43 @@
      color: #721c24;
  }
 
+ .scheduled-message {
+     background: #e3f2fd;
+     border: 2px solid #2196f3;
+     border-radius: 12px;
+     padding: 16px;
+     margin: 16px 0;
+     animation: fadeIn 0.3s ease-in;
+ }
+
+ .scheduled-header {
+     display: flex;
+     align-items: center;
+     margin-bottom: 8px;
+ }
+
+ .scheduled-icon {
+     width: 20px;
+     height: 20px;
+     margin-right: 8px;
+     color: #2196f3;
+ }
+
+ .scheduled-label {
+     font-weight: 600;
+     color: #1976d2;
+     font-size: 14px;
+ }
+
+ .scheduled-prompt {
+     background: white;
+     padding: 10px;
+     border-radius: 8px;
+     color: #333;
+     font-size: 14px;
+     margin-top: 8px;
+ }
+
  .input-container {
      padding: 20px;
      background: white;

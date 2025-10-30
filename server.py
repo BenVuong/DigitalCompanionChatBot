@@ -11,7 +11,10 @@ import asyncio
 from typing import Optional, Dict, Any
 from chatMessage import ChatMessage
 from mcpManager import loadMCPConfig, mcpToolToOpenAIFormat
-
+from watchfiles import awatch
+import os
+from dotenv import load_dotenv
+load_dotenv()
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 # Enable CORS
@@ -32,6 +35,7 @@ mcp_sessions: Dict[str, ClientSession] = {}
 mcp_tools: Dict[str, list] = {}
 pending_approvals: Dict[str, asyncio.Queue] = {}
 background_tasks = set()
+active_websockets: set = set()  # Track all active WebSocket connections
 
 
 class ChatRequest(BaseModel):
@@ -90,12 +94,85 @@ async def initialize_mcp_servers():
     
     # Give servers time to connect
     await asyncio.sleep(2)
+    
+    # Start watching for scheduled prompts
+    task = asyncio.create_task(watch_for_scheduled_prompts())
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
 
 
 @app.on_event("startup")
 async def startup_event():
     """Run on application startup"""
     await initialize_mcp_servers()
+
+
+async def watch_for_scheduled_prompts():
+    """Watch for pending_prompt.json creation and trigger chatbot"""
+    print("👀 Watching for scheduled prompts...")
+    try:
+        async for changes in awatch(".", debounce=200):
+            for _, path in changes:  # use _ to ignore the change type
+                if os.path.basename(path) == "pending_prompt.json":
+                    try:
+                        await asyncio.sleep(0.05)  # small delay to ensure file is written
+                        with open(path, "r") as f:
+                            data = json.load(f)
+                       
+                        system_prompt = data.get("systemPrompt")
+                        
+                        if not system_prompt:
+                            continue
+
+                        print(f"\n🕐 System Trigger: {system_prompt}")
+                        
+                        # Clear the file
+                        with open(path, "w") as f:
+                            json.dump({"systemPrompt": ""}, f)
+                       
+                        # Handle the scheduled prompt
+                        await handle_scheduled_prompt(system_prompt)
+                        
+                    except Exception as e:
+                        print(f"⚠️ Error handling scheduled prompt: {e}")
+    except Exception as e:
+        print(f"❌ Error in scheduled prompt watcher: {e}")
+
+
+async def handle_scheduled_prompt(prompt: str):
+    """Process a scheduled prompt and broadcast to all connected clients"""
+    if not prompt:
+        return
+    
+    # Process using the shared chat function (no approval needed, pass None for websocket)
+    response = await process_chat(prompt, "system",None, None, auto_approve=True)
+    
+    # Broadcast to all connected clients
+    await broadcast_scheduled_message(prompt, response)
+    
+    print(f"\nAssistant: {response}\n")
+    return response
+
+
+async def broadcast_scheduled_message(system_prompt: str, response: str):
+    """Broadcast scheduled message to all connected WebSocket clients"""
+    message_data = {
+        "type": "scheduled_message",
+        "system_prompt": system_prompt,
+        "response": response
+    }
+    
+    # Send to all connected clients
+    disconnected = set()
+    for ws in active_websockets:
+        try:
+            await ws.send_json(message_data)
+        except Exception as e:
+            print(f"Failed to send to client: {e}")
+            disconnected.add(ws)
+    
+    # Remove disconnected clients
+    active_websockets.difference_update(disconnected)
 
 
 @app.on_event("shutdown")
@@ -132,6 +209,9 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connection_id = id(websocket)
     pending_approvals[connection_id] = {}
+    
+    # Add to active websockets
+    active_websockets.add(websocket)
     
     # Queue for chat requests
     chat_queue = asyncio.Queue()
@@ -176,11 +256,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 if not user_message:
                     continue
                 
-                # Save user message
-                db.saveMessage("user", user_message)
                 
                 # Process chat with tool calls
-                response = await process_chat(websocket, connection_id)
+                response = await process_chat(user_message, "user",websocket, connection_id)
                 
                 # Send final response
                 await websocket.send_json({
@@ -209,6 +287,9 @@ async def websocket_endpoint(websocket: WebSocket):
         receiver_task.cancel()
         processor_task.cancel()
         
+        # Remove from active websockets
+        active_websockets.discard(websocket)
+        
         if connection_id in pending_approvals:
             del pending_approvals[connection_id]
         try:
@@ -217,10 +298,22 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
 
-async def process_chat(websocket: WebSocket, connection_id: int):
-    """Process chat with tool call handling"""
-    messages = db.getMessageHistory()
+async def process_chat(message: str, role: str, websocket: Optional[WebSocket], connection_id: Optional[int], auto_approve: bool = False):
+    """Process chat with tool call handling
     
+    Args:
+        websocket: WebSocket connection for user approval (None for auto-approve)
+        connection_id: Connection ID for tracking approvals (None for auto-approve)
+        auto_approve: If True, automatically approve all tool calls without user interaction
+    """
+    
+    if role == "system":
+        messages = db.getMessageHistory()
+        messages.append({"role":role, "content": message})
+    else:
+        db.saveMessage(role, message)
+        messages = db.getMessageHistory()
+
     # Prepare OpenAI tools
     openAITools = []
     if mcp_tools:
@@ -277,32 +370,46 @@ async def process_chat(websocket: WebSocket, connection_id: int):
                 toolName = fullToolName
                 serverName = None
             
-            # Create a queue for this specific tool call
-            pending_approvals[connection_id][toolCall.id] = asyncio.Queue()
-            
-            # Request approval from user
-            await websocket.send_json({
-                "type": "tool_call_request",
-                "tool_name": fullToolName,
-                "arguments": toolArgs,
-                "tool_call_id": toolCall.id
-            })
-            
-            # Wait for approval
-            approval_response = await pending_approvals[connection_id][toolCall.id].get()
-            approved = approval_response.get("approved", False)
-            reason = approval_response.get("reason", "")
-            
-            # Clean up the queue for this tool call
-            del pending_approvals[connection_id][toolCall.id]
+            # Handle approval based on mode
+            if auto_approve:
+                # Auto-approve for scheduled messages
+                approved = True
+                reason = ""
+                print(f"⚙️ Executing {fullToolName} (auto-approved)...")
+            else:
+                # Request approval from user via WebSocket
+                if not websocket or connection_id is None:
+                    # Safety check
+                    approved = False
+                    reason = "No websocket connection"
+                else:
+                    # Create a queue for this specific tool call
+                    pending_approvals[connection_id][toolCall.id] = asyncio.Queue()
+                    
+                    # Request approval from user
+                    await websocket.send_json({
+                        "type": "tool_call_request",
+                        "tool_name": fullToolName,
+                        "arguments": toolArgs,
+                        "tool_call_id": toolCall.id
+                    })
+                    
+                    # Wait for approval
+                    approval_response = await pending_approvals[connection_id][toolCall.id].get()
+                    approved = approval_response.get("approved", False)
+                    reason = approval_response.get("reason", "")
+                    
+                    # Clean up the queue for this tool call
+                    del pending_approvals[connection_id][toolCall.id]
             
             if approved:
                 # Execute tool
-                await websocket.send_json({
-                    "type": "tool_executing",
-                    "tool_name": fullToolName,
-                    "tool_call_id": toolCall.id
-                })
+                if websocket and not auto_approve:
+                    await websocket.send_json({
+                        "type": "tool_executing",
+                        "tool_name": fullToolName,
+                        "tool_call_id": toolCall.id
+                    })
                 
                 try:
                     if serverName and serverName in mcp_sessions:
@@ -322,28 +429,37 @@ async def process_chat(websocket: WebSocket, connection_id: int):
                         else:
                             toolResult = str(result.content)
                         
-                        await websocket.send_json({
-                            "type": "tool_success",
-                            "tool_name": fullToolName,
-                            "tool_call_id": toolCall.id
-                        })
+                        if websocket and not auto_approve:
+                            await websocket.send_json({
+                                "type": "tool_success",
+                                "tool_name": fullToolName,
+                                "tool_call_id": toolCall.id
+                            })
+                        else:
+                            print(f"✅ Tool executed successfully")
                     else:
                         toolResult = json.dumps({"error": f"Server '{serverName}' not found"})
+                        if websocket and not auto_approve:
+                            await websocket.send_json({
+                                "type": "tool_error",
+                                "tool_name": fullToolName,
+                                "tool_call_id": toolCall.id,
+                                "error": f"Server '{serverName}' not found"
+                            })
+                        else:
+                            print(f"❌ Server not found: {serverName}")
+                
+                except Exception as e:
+                    toolResult = json.dumps({"error": str(e)})
+                    if websocket and not auto_approve:
                         await websocket.send_json({
                             "type": "tool_error",
                             "tool_name": fullToolName,
                             "tool_call_id": toolCall.id,
-                            "error": f"Server '{serverName}' not found"
+                            "error": str(e)
                         })
-                
-                except Exception as e:
-                    toolResult = json.dumps({"error": str(e)})
-                    await websocket.send_json({
-                        "type": "tool_error",
-                        "tool_name": fullToolName,
-                        "tool_call_id": toolCall.id,
-                        "error": str(e)
-                    })
+                    else:
+                        print(f"❌ Tool execution failed: {e}")
             else:
                 # Tool call denied
                 if reason:
@@ -351,12 +467,13 @@ async def process_chat(websocket: WebSocket, connection_id: int):
                 else:
                     toolResult = json.dumps({"error": "Tool call denied by user"})
                 
-                await websocket.send_json({
-                    "type": "tool_denied",
-                    "tool_name": fullToolName,
-                    "tool_call_id": toolCall.id,
-                    "reason": reason
-                })
+                if websocket and not auto_approve:
+                    await websocket.send_json({
+                        "type": "tool_denied",
+                        "tool_name": fullToolName,
+                        "tool_call_id": toolCall.id,
+                        "reason": reason
+                    })
             
             # Add tool result to messages
             messages.append({

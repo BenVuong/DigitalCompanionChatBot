@@ -22,4 +22,5 @@ CREATE TABLE IF NOT EXISTS messages (
         return[{"role": role, "content": content} for role, content in rows[::-1]]
     
     def clearHistory(self):
-        pass
+        self.cursor.execute("DELETE FROM messages")
+        self.conn.commit()
