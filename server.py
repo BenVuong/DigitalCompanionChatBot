@@ -118,17 +118,18 @@ async def watch_for_scheduled_prompts():
                         await asyncio.sleep(0.05)  # small delay to ensure file is written
                         with open(path, "r") as f:
                             data = json.load(f)
-                       
-                        system_prompt = data.get("systemPrompt")
+                            prompts_queue = data.get("prompts", [])
+                            system_prompt = prompts_queue[0]["systemPrompt"] if prompts_queue else None
                         
-                        if not system_prompt:
+                        if system_prompt == None:
                             continue
 
                         print(f"\n🕐 System Trigger: {system_prompt}")
                         
                         # Clear the file
                         with open(path, "w") as f:
-                            json.dump({"systemPrompt": ""}, f)
+                            prompts_queue = prompts_queue[1:]
+                            json.dump({"prompts": prompts_queue}, f)
                        
                         # Handle the scheduled prompt
                         await handle_scheduled_prompt(system_prompt)
@@ -145,7 +146,7 @@ async def handle_scheduled_prompt(prompt: str):
         return
     
     # Process using the shared chat function (no approval needed, pass None for websocket)
-    response = await process_chat(prompt, "system",None, None, auto_approve=True)
+    response = await process_chat(prompt, "system",False,None, None, auto_approve=False)
     
     # Broadcast to all connected clients
     await broadcast_scheduled_message(prompt, response)
@@ -258,7 +259,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 
                 # Process chat with tool calls
-                response = await process_chat(user_message, "user",websocket, connection_id)
+                response = await process_chat(user_message, "user", True,websocket, connection_id)
                 
                 # Send final response
                 await websocket.send_json({
@@ -298,7 +299,7 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
 
-async def process_chat(message: str, role: str, websocket: Optional[WebSocket], connection_id: Optional[int], auto_approve: bool = False):
+async def process_chat(message: str, role: str, tools: bool, websocket: Optional[WebSocket], connection_id: Optional[int], auto_approve: bool = False):
     """Process chat with tool call handling
     
     Args:
@@ -306,6 +307,8 @@ async def process_chat(message: str, role: str, websocket: Optional[WebSocket], 
         connection_id: Connection ID for tracking approvals (None for auto-approve)
         auto_approve: If True, automatically approve all tool calls without user interaction
     """
+
+    systemPrompt = "You are a friendly companion named Aelita"
     
     if role == "system":
         messages = db.getMessageHistory()
@@ -322,7 +325,8 @@ async def process_chat(message: str, role: str, websocket: Optional[WebSocket], 
     
     maxIteration = 10
     iteration = 0
-    
+    if tools == False:
+        openAITools = None
     while iteration < maxIteration:
         iteration += 1
         
