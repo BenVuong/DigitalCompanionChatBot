@@ -23,7 +23,11 @@ def searchAnime(queryTitle: str) -> str:
         title = x["title"]
         if x["title_english"] != None:
             title = x["title_english"]
-        result += ("title: "+title+ " ("+ x["type"]+", "+str(year)+") mal_id: " + str(x["mal_id"]) + "\n" )
+        if x["type"] is None:
+            animeType = ""
+        else:
+            animeType = x["type"]
+        result += ("title: "+title+ " ("+ animeType+", "+str(year)+") mal_id: " + str(x["mal_id"]) + "\n" )
     return(result)
     
 @mcp.tool()

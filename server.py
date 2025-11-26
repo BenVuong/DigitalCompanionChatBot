@@ -119,7 +119,7 @@ async def watch_for_scheduled_prompts():
                         with open(path, "r") as f:
                             data = json.load(f)
                             prompts_queue = data.get("prompts", [])
-                            system_prompt = prompts_queue[0]["systemPrompt"] if prompts_queue else None
+                            system_prompt = prompts_queue[0]["developerPrompt"] if prompts_queue else None
                         
                         if system_prompt == None:
                             continue
@@ -146,7 +146,7 @@ async def handle_scheduled_prompt(prompt: str):
         return
     
     # Process using the shared chat function (no approval needed, pass None for websocket)
-    response = await process_chat(prompt, "system",False,None, None, auto_approve=False)
+    response = await process_chat(prompt, "developer",False,None, None, auto_approve=False)
     
     # Broadcast to all connected clients
     await broadcast_scheduled_message(prompt, response)
@@ -307,40 +307,64 @@ async def process_chat(message: str, role: str, tools: bool, websocket: Optional
         connection_id: Connection ID for tracking approvals (None for auto-approve)
         auto_approve: If True, automatically approve all tool calls without user interaction
     """
-
-    systemPrompt = "You are a friendly companion named Aelita"
     
-    if role == "system":
-        messages = db.getMessageHistory()
-        messages.append({"role":role, "content": message})
+    systemPrompt = (
+    "You are a friendly companion named Aelita. You have the ability to see by using "
+    "the developer prompts. Developer prompts will tell you what you see and you use "
+    "them to craft a human-like response for the user."
+    "Only use tools when asked by the user. Don't use any tools when it is not needed."
+)
+
+    messages = [{"role": "system", "content": systemPrompt}]
+
+    history = db.getMessageHistory()  # Expecting a list of {role, content} dicts
+    if history:
+        messages.extend(history)
+
+    if role == "developer":
+        messages.append({"role": role, "content": message})
     else:
         db.saveMessage(role, message)
-        messages = db.getMessageHistory()
+        messages.append({"role": role, "content": message})
 
     # Prepare OpenAI tools
     openAITools = []
-    if mcp_tools:
-        for serverName, tools in mcp_tools.items():
-            openAITools.extend([mcpToolToOpenAIFormat(tool, serverName) for tool in tools])
+    if tools and mcp_tools:  # Only prepare tools if tools=True
+        for serverName, tools_list in mcp_tools.items():
+            openAITools.extend([mcpToolToOpenAIFormat(tool, serverName) for tool in tools_list])
     
     maxIteration = 10
     iteration = 0
-    if tools == False:
-        openAITools = None
+    
     while iteration < maxIteration:
         iteration += 1
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            tools=openAITools if openAITools else None
-        )
+        # Build API call parameters conditionally
+        api_params = {
+            "model": "gpt-4o-mini",
+            "messages": messages,
+        }
+        
+        # ONLY add tools and tool_choice if tools are enabled
+        if tools and openAITools:
+            api_params["tools"] = openAITools
+            api_params["tool_choice"] = "auto"
+        
+        response = client.chat.completions.create(**api_params)
         
         message = response.choices[0].message
         
         # No tool calls - return response
         if not message.tool_calls:
             reply = message.content
+            db.saveMessage("assistant", reply)
+            return reply
+        
+        # If we get here, there are tool calls
+        # But if tools were disabled, this shouldn't happen - handle gracefully
+        if not tools:
+            # Tool calls came back but tools are disabled - just return the text content
+            reply = message.content or "I cannot use tools right now."
             db.saveMessage("assistant", reply)
             return reply
         
