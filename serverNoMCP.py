@@ -9,6 +9,7 @@ from typing import Optional, Dict
 from chatMessage import ChatMessage
 from watchfiles import awatch
 import os
+import tools
 from dotenv import load_dotenv
 from mcpServers.mcpServer import searchAnime, getAnimeInfo
 load_dotenv()
@@ -31,39 +32,6 @@ db = ChatMessage("chatMemory.db")
 background_tasks = set()
 active_websockets: set = set()
 pending_approvals: Dict[int, Dict[str, asyncio.Queue]] = {}
-
-
-
-AVAILABLE_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "searchAnime",
-            "description": "Query search a title of an anime. Returns a list of anime that best fit the search term along with its respective mal_id When displaying the search result to the user, just list the anime title and not its mal_id Args: queryTitle: title of anime as search term",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "queryTitle": {"type": "string", "description": " title of anime as search term"}
-                },
-                "required": ["queryTitle"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "getAnimeInfo",
-            "description": "Search more info about an anime by using it's respective mal_id. To get the anime's respective mal_id use searchAnime tool.This tool will return the anime's title, type, number of episodes, its score, when it premired, and synopsis Args:mal_id: the anime's respective mal_id",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "mal_id": {"type": "integer", "description": "the anime's respective mal_id"}
-                },
-                "required": ["mal_id"]
-            }
-        }
-    }
-]
 
 async def watch_for_scheduled_prompts():
     """Watch for pending_prompt.json creation and trigger chatbot"""
@@ -326,7 +294,7 @@ async def process_chat(
         
         # Only add tools if enabled
         if use_tools:
-            api_params["tools"] = AVAILABLE_TOOLS
+            api_params["tools"] = tools.toolset
             api_params["tool_choice"] = "auto"
         
         response = client.chat.completions.create(**api_params)
@@ -420,15 +388,7 @@ async def process_chat(
                     })
               
                 try:    
-                    if function_name == "searchAnime":
-                        function_response = searchAnime(**function_args)
-                        
-                    elif function_name == "getAnimeInfo":
-                        function_response = getAnimeInfo(**function_args)
-                        
-                    else:
-                        function_response = json.dumps({"error": "Unknown function"})
-                    
+                    function_response=tools.executeTools(function_name, function_args)
                     print(f"✅ Function executed: {function_response}\n")
                     
                     if websocket and not auto_approve:

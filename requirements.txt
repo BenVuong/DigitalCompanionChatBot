@@ -4,3 +4,5 @@ jikanpy-v4
 fastapi
 watchfiles
 uvicorn[standard]
+opencv-python
+pyserial

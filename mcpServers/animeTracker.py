@@ -1,7 +1,6 @@
 import sqlite3
 import os
 from mcp.server.fastmcp import FastMCP
-from mcp.types import Resource, TextResourceContents
 
 mcp = FastMCP("Anime-Episodes-Tracker")
 db = "/home/ben/chatbot/mydatabase.db"

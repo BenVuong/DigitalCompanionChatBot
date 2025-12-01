@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from chatMessage import ChatMessage
 from watchfiles import awatch
-from mcpManager import loadMCPConfig, mcpToolToOpenAIFormat
+from mcpServers.mcpManager import loadMCPConfig, mcpToolToOpenAIFormat
 
 client = OpenAI(api_key="none", base_url="http://localhost:5001/v1" )
 db = ChatMessage("chatMemory.db")

@@ -10,7 +10,7 @@ from mcp.client.stdio import stdio_client
 import asyncio
 from typing import Optional, Dict, Any
 from chatMessage import ChatMessage
-from mcpManager import loadMCPConfig, mcpToolToOpenAIFormat
+from mcpServers.mcpManager import loadMCPConfig, mcpToolToOpenAIFormat
 from watchfiles import awatch
 import os
 from dotenv import load_dotenv
