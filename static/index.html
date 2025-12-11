@@ -69,11 +69,17 @@
             }
         }
 
+        let audioQueue = [];
+        let isPlayingAudio = false;
+
         function handleMessage(data) {
             console.log('Received message:', data);
             switch (data.type) {
                 case 'message':
-                    addMessage(data.role, data.content);
+                    addMessage(data.role, data.content, data.role === "assistant");
+                    break;
+                case 'audio_chunk':
+                    handleAudioChunk(data);
                     break;
                 case 'scheduled_message':
                     addScheduledMessage(data.system_prompt, data.response);
@@ -95,8 +101,75 @@
                     break;
             }
         }
+        
+        function handleAudioChunk(data){
+            console.log(`Recieved audio chunk ${data.chunk_index + 1}/${data.total_chunks}`)
 
-        function addMessage(role, content) {
+            audioQueue.push({
+                index: data.chunk_index,
+                file:`/static/tts/${data.audio_file}?t=${Date.now()}`
+            });
+
+            if (!isPlayingAudio)
+            {
+                playNextAudioChunk();
+            }
+        }
+
+        async function playNextAudioChunk(){
+            if (audioQueue.length===0)
+            {
+                isPlayingAudio = false;
+                return;
+            }
+
+            isPlayingAudio = true;
+            const chunk = audioQueue.shift();
+
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+
+            const audio = new Audio(chunk.file);
+
+            audio.onloadedmetadata = () =>{
+
+                audio.play().
+                then(() => {
+                    console.log(`Playing chunk ${chunk.index}`);
+                })
+                .catch((error) => {
+                    console.log('AutoPlay prevented:', error)
+                    playNextAudioChunk();
+                });
+            }
+            
+            audio.onended = () =>{
+                console.log(`Playing CHunk ${chunk.index}`)
+                playNextAudioChunk();
+            };
+
+            audio.onerror = () => {
+                console.error(`error playing chunk ${chunk.index}`);
+                setTimeout( playNextAudioChunk(),200);
+            };
+
+            audio.load();
+        }
+
+        function playTTS()
+        {
+            const voice = new Audio(`/static/tts/audio.mp3?t=${Date.now()}`);
+
+            voice.play()
+                .then(() => {
+                    console.log('TTS playing')
+              })
+              .catch((error) =>{
+                console.log('autoplay prevented: ', error)
+              })
+        }
+
+        function addMessage(role, content, playAudio = false) {
             const chatContainer = document.getElementById('chatContainer');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
@@ -108,6 +181,12 @@
             messageDiv.appendChild(contentDiv);
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            // if (playAudio && role =='assistant')
+            // {
+            //     playTTS();
+            // }
+            
         }
 
         function addScheduledMessage(systemPrompt, response) {
@@ -128,7 +207,7 @@
             chatContainer.appendChild(scheduledDiv);
 
             // Add assistant response
-            addMessage('assistant', response);
+            addMessage('assistant', response, true);
 
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
@@ -245,7 +324,7 @@
 
                 data.messages.forEach(msg => {
                     if (msg.role === 'user' || msg.role === 'assistant') {
-                        addMessage(msg.role, msg.content);
+                        addMessage(msg.role, msg.content, false);
                     }
                 });
             } catch (error) {

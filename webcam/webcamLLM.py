@@ -3,6 +3,8 @@ import json
 import base64
 import cv2
 cap = cv2.VideoCapture(0)
+import random
+import time
 from turntable import TurnTable
 from tools import writeDeveloperPrompt
 client = OpenAI(api_key="none", base_url="http://localhost:5001/v1")
@@ -91,7 +93,7 @@ def chat_with_functions(image: str, messages: list):
             model="gpt-4o-mini",
             messages=messages,
             tools=tools,
-            tool_choice="auto"
+            tool_choice="required"
         )
         
     response_message = response.choices[0].message
@@ -155,9 +157,9 @@ if __name__ == "__main__":
     
     while True:
       
-        userInput = input("Enter: ")
+        # userInput = input("Enter: ")
         print(f"\n{'='*60}")
-        # print(f"LOOP {x + 1}")
+        
         print(f"{'='*60}")
         
         ret, frame = cap.read()
@@ -170,25 +172,25 @@ if __name__ == "__main__":
         cv2.imshow('Webcam Feed', frame)
         cv2.waitKey(1)  # Add small delay to show frame
         
-        # Encode the frame as JPEG
+        
         _, buffer = cv2.imencode('.jpg', frame)
         
-        # Convert to base64
+
         image_base64 = base64.b64encode(buffer).decode('utf-8')
         
         print("Image captured! Sending to LLM for analysis...")
         
         try:
-            # Send to OpenAI API with persistent conversation history
             conversation_history = chat_with_functions(
                 image=image_base64, 
                 messages=conversation_history
             )
-            
-            # print(f"\n✅ Loop {x + 1} complete. Message history length: {len(conversation_history)}")
-            
+  
         except Exception as e:
             print(f"Error calling OpenAI API: {e}")
+        randomInterval = random.randint(60,300)
+        print("Sleeping now for "+str(randomInterval)+" seconds")
+        time.sleep(randomInterval)
     
     cap.release()
     cv2.destroyAllWindows()

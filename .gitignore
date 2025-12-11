@@ -4,3 +4,4 @@ chatMemory.db
 mydatabase.db
 pending_prompt.json
 __pycache__
+static/tts

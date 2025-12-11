@@ -34,7 +34,7 @@ def writeDeveloperPrompt(developerPrompt: str):
         
         # Add new prompt to the queue
         prompts_queue.append({
-            "developerPrompt": developerPrompt
+            "developerPrompt": developerPrompt + " Use this observation to make initiate small talk with the user"
         })
         
         # Write updated queue back to file

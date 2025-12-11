@@ -9,9 +9,10 @@ from typing import Optional, Dict
 from chatMessage import ChatMessage
 from watchfiles import awatch
 import os
+import glob
 import tools
 from dotenv import load_dotenv
-from mcpServers.mcpServer import searchAnime, getAnimeInfo
+from tts import TTS
 load_dotenv()
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -26,12 +27,17 @@ app.add_middleware(
 )
 
 # Initialize OpenAI client and database
+ttsClient = OpenAI(
+    api_key="none",base_url="http://localhost:7778/v1"
+)
+ttsGen = TTS(ttsClient) 
 client = OpenAI(api_key="none", base_url="http://localhost:5001/v1")
 db = ChatMessage("chatMemory.db")
 
 background_tasks = set()
 active_websockets: set = set()
 pending_approvals: Dict[int, Dict[str, asyncio.Queue]] = {}
+
 
 async def watch_for_scheduled_prompts():
     """Watch for pending_prompt.json creation and trigger chatbot"""
@@ -189,7 +195,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 
                 # Process chat with tools and approval
-                response = await process_chat(
+                await process_chat(
                     message=user_message,
                     role="user",
                     use_tools=True,
@@ -198,12 +204,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     auto_approve=False
                 )
                 
-                # Send final response
-                await websocket.send_json({
-                    "type": "message",
-                    "role": "assistant",
-                    "content": response
-                })
+                # # Send final response
+                # await websocket.send_json({
+                #     "type": "message",
+                #     "role": "assistant",
+                #     "content": response
+                # })
                 
         except Exception as e:
             print(f"Chat processor error: {e}")
@@ -255,9 +261,11 @@ async def process_chat(
     
     system_prompt = (
         "You are a friendly companion named Aelita. You have the ability to see by using "
-        "the developer prompts. Developer prompts will tell you what you see and you use "
-        "them to craft a human-like response for the user.\n\n"
+        "Developer prompts will tell you what you see and you use "
+        "then to craft a human-like response for the user.\n\n"
         "IMPORTANT RULES FOR TOOLS:\n"
+        "- DO NOT use emojis or markdown formatting in your response to the user"
+        "- Avoid using markdown formatting in your text repsonse"
         "- ONLY use tools when the user EXPLICITLY asks you to perform an action\n"
         "- DO NOT use tools for greetings, questions, or casual conversation\n"
         "- DO NOT use tools unless absolutely necessary\n"
@@ -265,7 +273,14 @@ async def process_chat(
         "- Examples of when NOT to use tools: 'hello', 'how are you', 'what can you do', general questions\n"
         "- Examples of when TO use tools: 'add this anime', 'search for anime', 'update my progress'"
     )
+    
+    tempAudioFiles = glob.glob("static/tts/temp_audio*.mp3")
+    print(f"Temp audio files found: {tempAudioFiles}")
+        #delete temp files if previous temp files exists
 
+    for temp_file in tempAudioFiles:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
     messages = [{"role": "system", "content": system_prompt}]
     
     # Add chat history
@@ -304,12 +319,24 @@ async def process_chat(
         if not response_message.tool_calls:
             reply = response_message.content
             db.saveMessage("assistant", reply)
+
+            if websocket:
+                await websocket.send_json({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": reply
+                })
+
+            if websocket:
+                asyncio.create_task(generateAndStream(reply, websocket, ttsGen))
+            
             return reply
         
         # If tools disabled but got tool calls anyway (shouldn't happen)
         if not use_tools:
             reply = response_message.content or "I cannot use tools right now."
             db.saveMessage("assistant", reply)
+            
             return reply
         
         # Add assistant message with tool calls
@@ -437,6 +464,29 @@ async def process_chat(
             })
     
     return "Maximum iterations reached. Please try again"
+
+
+async def generateAndStream(text: str, websocket: WebSocket, ttsGenerator: TTS):
+    try:
+        chunks = ttsGenerator.chunk_text(text, 500)
+
+        async for audio_chunk_info in ttsGenerator.generateStreaming(chunks, "./static/tts"):
+           await asyncio.sleep(0.01)
+           
+           await websocket.send_json({
+                "type": "audio_chunk",
+                "chunk_index": audio_chunk_info["chunk_index"],
+                "total_chunks": audio_chunk_info["total_chunks"],
+                "audio_file": audio_chunk_info["audio_file"]
+            })
+            # 
+
+        # await websocket.send_json({
+        #     "type": "audio_complete",
+        #     "audio_file": "audio.mp3"
+        # })
+    except Exception as e:
+        print(f"Error generating audio: {e}")
 
 
 if __name__ == "__main__":
